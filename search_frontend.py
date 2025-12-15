@@ -1,8 +1,22 @@
 from flask import Flask, request, jsonify
+import pickle
+import nltk
+from nltk.stem.porter import *
+
+
 
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
+
+nltk.download('stopwords')
+RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
+# path to the page views file
+page_views = "page_views_august_2021.pkl"
+# open the file and load the data in wid2pv which is a dict that receives page id and returns num of views
+with open(page_views, "rb") as file:
+    wid2pv = pickle.load(file)
+
 
 app = MyFlaskApp(__name__)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
@@ -167,7 +181,8 @@ def get_pageview():
     if len(wiki_ids) == 0:
       return jsonify(res)
     # BEGIN SOLUTION
-
+    for wiki_id in wiki_ids:
+        res.append(wid2pv[wiki_id])
     # END SOLUTION
     return jsonify(res)
 
