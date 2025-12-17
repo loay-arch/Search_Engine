@@ -88,27 +88,34 @@ TUPLE_SIZE = 6       # We're going to pack the doc_id and tf values in this
 TF_MASK = 2 ** 16 - 1 # Masking the 16 low bits of an integer
 
 
-class InvertedIndex:  
+class InvertedIndex:
     def __init__(self, docs={}):
         """ Initializes the inverted index and add documents to it (if provided).
         Parameters:
         -----------
           docs: dict mapping doc_id to list of tokens
         """
-        # stores document frequency per term
-        self.df = Counter()
-        # stores total frequency per term
+        self.term_frequencey_per_doc = defaultdict(Counter)
+        # total words in the corpus
+        self.total_corpus_terms=0
+        # stores the size of the corpus
+        self.N = 0
+        # stores the size of each document
+        self.doc_len = {}
+        # stores the number of documents a term appears in
+        self.document_frequencey_per_term = Counter()
+        # stores the total number of each term in the corpus
         self.term_total = Counter()
-        # stores posting list per term while building the index (internally), 
+        # stores posting list per term while building the index (internally),
         # otherwise too big to store in memory.
         self._posting_list = defaultdict(list)
-        # mapping a term to posting file locations, which is a list of 
+        # mapping a term to posting file locations, which is a list of
         # (file_name, offset) pairs. Since posting lists are big we are going to
-        # write them to disk and just save their location in this list. We are 
+        # write them to disk and just save their location in this list. We are
         # using the MultiFileWriter helper class to write fixed-size files and store
-        # for each term/posting list its list of locations. The offset represents 
+        # for each term/posting list its list of locations. The offset represents
         # the number of bytes from the beginning of the file where the posting list
-        # starts. 
+        # starts.
         self.posting_locs = defaultdict(list)
 
         for doc_id, tokens in docs.items():
@@ -116,18 +123,22 @@ class InvertedIndex:
 
     def add_doc(self, doc_id, tokens):
         """ Adds a document to the index with a given `doc_id` and tokens. It counts
-            the tf of tokens, then update the index (in memory, no storage 
+            the tf of tokens, then update the index (in memory, no storage
             side-effects).
         """
+        self.total_corpus_terms += len(tokens)
+        self.N += 1
+        self.doc_len[doc_id] = len(tokens)
         w2cnt = Counter(tokens)
         self.term_total.update(w2cnt)
         for w, cnt in w2cnt.items():
-            self.df[w] = self.df.get(w, 0) + 1
+            self.term_frequencey_per_doc[doc_id][w] += cnt
+            self.document_frequencey_per_term[w] = self.document_frequencey_per_term.get(w, 0) + 1
             self._posting_list[w].append((doc_id, cnt))
 
     def write_index(self, base_dir, name, bucket_name=None):
         """ Write the in-memory index to disk. Results in the file: 
-            (1) `name`.pkl containing the global term stats (e.g. df).
+            (1) `name`.pkl containing the global term stats (e.g. document_frequencey_per_term).
         """
         #### GLOBAL DICTIONARIES ####
         self._write_globals(base_dir, name, bucket_name)
@@ -152,9 +163,9 @@ class InvertedIndex:
         """
         with closing(MultiFileReader(base_dir, bucket_name)) as reader:
             for w, locs in self.posting_locs.items():
-                b = reader.read(locs, self.df[w] * TUPLE_SIZE)
+                b = reader.read(locs, self.document_frequencey_per_term[w] * TUPLE_SIZE)
                 posting_list = []
-                for i in range(self.df[w]):
+                for i in range(self.document_frequencey_per_term[w]):
                     doc_id = int.from_bytes(b[i*TUPLE_SIZE:i*TUPLE_SIZE+4], 'big')
                     tf = int.from_bytes(b[i*TUPLE_SIZE+4:(i+1)*TUPLE_SIZE], 'big')
                     posting_list.append((doc_id, tf))
@@ -166,8 +177,8 @@ class InvertedIndex:
             return posting_list
         with closing(MultiFileReader(base_dir, bucket_name)) as reader:
             locs = self.posting_locs[w]
-            b = reader.read(locs, self.df[w] * TUPLE_SIZE)
-            for i in range(self.df[w]):
+            b = reader.read(locs, self.document_frequencey_per_term[w] * TUPLE_SIZE)
+            for i in range(self.document_frequencey_per_term[w]):
                 doc_id = int.from_bytes(b[i*TUPLE_SIZE:i*TUPLE_SIZE+4], 'big')
                 tf = int.from_bytes(b[i*TUPLE_SIZE+4:(i+1)*TUPLE_SIZE], 'big')
                 posting_list.append((doc_id, tf))
