@@ -1,22 +1,50 @@
+import math
+import os
 from flask import Flask, request, jsonify
 import pickle
-import nltk
-from nltk.stem.porter import *
-
-
-
+from text_Modification import all_stopwords,RE_WORD,ps
+from collections import defaultdict
+from BM25 import BM25
+from google.cloud import storage
+import gzip
+from inverted_index_gcp import InvertedIndex
+from concurrent.futures import ThreadPoolExecutor
 class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\asust\Desktop\search_engine_git\Search_Engine\uni-project-480107-d6cc24a4a250.json"
+BUCKET_NAME = "214682189"
+TITLE_DIR = "title_index"
+TITLE_INDEX = "title"
+BODY_INDEX = "body"
+BODY_DIR = "body_index"
+client = storage.Client()
+bucket = client.bucket(BUCKET_NAME)
+print("Loading Body Index...")
+body_index = InvertedIndex.read_index(BODY_DIR, BODY_INDEX, BUCKET_NAME)
+print("Loading Title Index...")
+title_index = InvertedIndex.read_index(TITLE_DIR, TITLE_INDEX, BUCKET_NAME)
+print("Loading Page Views...")
+client = storage.Client()
+bucket = client.bucket(BUCKET_NAME)
+blob_pv = bucket.blob("page_views_august_2021.pkl")
+with blob_pv.open("rb") as f:
+    page_views = pickle.load(f)
+print("Loading PageRank...")
+pagerank_scores = defaultdict(float)
+pr_path = "pr/part-00000-dfa568ba-d8f3-4828-9ded-c144a863ddec-c000.csv.gz"
+blob_pr = bucket.blob(pr_path)
+with blob_pr.open("rb") as f:
+    with gzip.open(f, "rt") as gz:
+        for line in gz:
+            try:
+                doc_id, rank = line.strip().split(',')
+                pagerank_scores[int(doc_id)] = float(rank)
+            except ValueError:
+                continue
 
-nltk.download('stopwords')
-RE_WORD = re.compile(r"""[\#\@\w](['\-]?\w){2,24}""", re.UNICODE)
-# path to the page views file
-page_views = "page_views_august_2021.pkl"
-# open the file and load the data in wid2pv which is a dict that receives page id and returns num of views
-with open(page_views, "rb") as file:
-    wid2pv = pickle.load(file)
-
+bm25_body = BM25(doc_len=body_index.doc_len, df=body_index.document_frequencey_per_term, N=body_index.N, total_terms=body_index.total_corpus_terms)
+bm25_title = BM25(doc_len=title_index.doc_len,df=title_index.document_frequencey_per_term, N=title_index.N,total_terms=title_index.total_corpus_terms)
 
 app = MyFlaskApp(__name__)
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
@@ -36,7 +64,7 @@ def search():
         if you're using ngrok on Colab or your external IP on GCP.
     Returns:
     --------
-        list of up to 100 search results, ordered from best to worst where each 
+        list of up to 100 search results, ordered from best to worst where each
         element is a tuple (wiki_id, title).
     '''
     res = []
@@ -44,7 +72,34 @@ def search():
     if len(query) == 0:
       return jsonify(res)
     # BEGIN SOLUTION
-
+    tokens = [ ps.stem(m.group())for m in RE_WORD.finditer(query.lower())if m.group() not in all_stopwords ]
+    body_index_scores = defaultdict(float)
+    body_index_idf = bm25_body.calc_idf(tokens)
+    title_index_scores = defaultdict(float)
+    title_index_idf = bm25_title.calc_idf(tokens)
+    for term in tokens:
+        if term not in body_index.posting_locs:
+            continue
+        body_index_posting_list = body_index.read_a_posting_list(base_dir=BODY_DIR, w=term, bucket_name=BUCKET_NAME)
+        for doc_id, tf in body_index_posting_list:
+            body_index_scores[doc_id] += bm25_body.score_term(tf, doc_id, body_index_idf[term])
+        if term not in title_index.posting_locs:
+            continue
+        title_index_posting_list = title_index.read_a_posting_list(base_dir=TITLE_DIR, w=term, bucket_name=BUCKET_NAME)
+        for doc_id, tf in title_index_posting_list:
+            title_index_scores[doc_id] += bm25_title.score_term(tf, doc_id, title_index_idf[term])
+    final_score = {}
+    candidate_docs = set(body_index_scores.keys()) | set(title_index_scores.keys())
+    page_views_tuner = 1.4
+    page_rank_tuner = 0.8
+    for doc_id in candidate_docs:
+        fused_bm25 = (0.50 * body_index_scores.get(doc_id,0)) + (0.50 * title_index_scores.get(doc_id,0))
+        document_views = page_views.get(doc_id,0)
+        views_score = math.log10(document_views+1)
+        document_page_rank = pagerank_scores.get(doc_id,0)
+        page_rank_score = math.log10(document_page_rank+1)
+        final_score [doc_id] = fused_bm25 + (page_views_tuner * views_score) + (page_rank_tuner * page_rank_score)
+    res = sorted(final_score.items(), key=lambda item: item[1], reverse=True)[:100]
     # END SOLUTION
     return jsonify(res)
 
@@ -182,7 +237,7 @@ def get_pageview():
       return jsonify(res)
     # BEGIN SOLUTION
     for wiki_id in wiki_ids:
-        res.append(wid2pv[wiki_id])
+        res.append(page_views.get(wiki_id,0))
     # END SOLUTION
     return jsonify(res)
 
