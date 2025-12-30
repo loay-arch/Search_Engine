@@ -51,11 +51,11 @@ app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
 
 @app.route("/search")
 def search():
-    ''' Returns up to a 100 of your best search results for the query. This is 
+    ''' Returns up to a 100 of your best search results for the query. This is
         the place to put forward your best search engine, and you are free to
-        implement the retrieval whoever you'd like within the bound of the 
+        implement the retrieval whoever you'd like within the bound of the
         project requirements (efficiency, quality, etc.). That means it is up to
-        you to decide on whether to use stemming, remove stopwords, use 
+        you to decide on whether to use stemming, remove stopwords, use
         PageRank, query expansion, etc.
 
         To issue a query navigate to a URL like:
@@ -70,45 +70,68 @@ def search():
     res = []
     query = request.args.get('query', '')
     if len(query) == 0:
-      return jsonify(res)
-    # BEGIN SOLUTION
-    tokens = [ ps.stem(m.group())for m in RE_WORD.finditer(query.lower())if m.group() not in all_stopwords ]
-    body_index_scores = defaultdict(float)
+        return jsonify(res)
+
+
+    tokens = [ps.stem(m.group()) for m in RE_WORD.finditer(query.lower()) if m.group() not in all_stopwords]
+
+
     body_index_idf = bm25_body.calc_idf(tokens)
-    title_index_scores = defaultdict(float)
     title_index_idf = bm25_title.calc_idf(tokens)
-    for term in tokens:
-        if term not in body_index.posting_locs:
-            continue
-        body_index_posting_list = body_index.read_a_posting_list(base_dir=BODY_DIR, w=term, bucket_name=BUCKET_NAME)
-        for doc_id, tf in body_index_posting_list:
-            body_index_scores[doc_id] += bm25_body.score_term(tf, doc_id, body_index_idf[term])
-        if term not in title_index.posting_locs:
-            continue
-        title_index_posting_list = title_index.read_a_posting_list(base_dir=TITLE_DIR, w=term, bucket_name=BUCKET_NAME)
-        for doc_id, tf in title_index_posting_list:
-            title_index_scores[doc_id] += bm25_title.score_term(tf, doc_id, title_index_idf[term])
+
+    body_index_scores = defaultdict(float)
+    title_index_scores = defaultdict(float)
+
+
+    with ThreadPoolExecutor() as executor:
+
+        body_threads = [executor.submit(read_posting, body_index, term, BODY_DIR) for term in tokens]
+        title_threads = [executor.submit(read_posting, title_index, term, TITLE_DIR) for term in tokens]
+
+
+        for thread in body_threads:
+            term, posting_list = thread.result()
+            term_idf = body_index_idf.get(term, 0)
+            for doc_id, tf in posting_list:
+                body_index_scores[doc_id] += bm25_body.score_term(tf, doc_id, term_idf)
+
+
+        for thread in title_threads:
+            term, posting_list = thread.result()
+            term_idf = title_index_idf.get(term, 0)
+            for doc_id, tf in posting_list:
+                title_index_scores[doc_id] += bm25_title.score_term(tf, doc_id, term_idf)
+
+
     final_score = {}
     candidate_docs = set(body_index_scores.keys()) | set(title_index_scores.keys())
+
     page_views_tuner = 1.4
     page_rank_tuner = 0.8
+
     for doc_id in candidate_docs:
-        fused_bm25 = (0.50 * body_index_scores.get(doc_id,0)) + (0.50 * title_index_scores.get(doc_id,0))
-        document_views = page_views.get(doc_id,0)
-        views_score = math.log10(document_views+1)
-        document_page_rank = pagerank_scores.get(doc_id,0)
-        page_rank_score = math.log10(document_page_rank+1)
-        final_score [doc_id] = fused_bm25 + (page_views_tuner * views_score) + (page_rank_tuner * page_rank_score)
+        fused_bm25 = (0.50 * body_index_scores.get(doc_id, 0)) + (0.50 * title_index_scores.get(doc_id, 0))
+
+
+        document_views = page_views.get(doc_id, 0)
+        views_score = math.log10(document_views + 1)
+
+        document_page_rank = pagerank_scores.get(doc_id, 0)
+        page_rank_score = math.log10(document_page_rank + 1)
+
+        final_score[doc_id] = fused_bm25 + (page_views_tuner * views_score) + (page_rank_tuner * page_rank_score)
+
     res = sorted(final_score.items(), key=lambda item: item[1], reverse=True)[:100]
-    # END SOLUTION
+
+    # Return formatted list
     return jsonify(res)
 
 @app.route("/search_body")
 def search_body():
     ''' Returns up to a 100 search results for the query using TFIDF AND COSINE
-        SIMILARITY OF THE BODY OF ARTICLES ONLY. DO NOT use stemming. DO USE the 
-        staff-provided tokenizer from Assignment 3 (GCP part) to do the 
-        tokenization and remove stopwords. 
+        SIMILARITY OF THE BODY OF ARTICLES ONLY. DO NOT use stemming. DO USE the
+        staff-provided tokenizer from Assignment 3 (GCP part) to do the
+        tokenization and remove stopwords.
 
         To issue a query navigate to a URL like:
          http://YOUR_SERVER_DOMAIN/search_body?query=hello+world
@@ -116,7 +139,7 @@ def search_body():
         if you're using ngrok on Colab or your external IP on GCP.
     Returns:
     --------
-        list of up to 100 search results, ordered from best to worst where each 
+        list of up to 100 search results, ordered from best to worst where each
         element is a tuple (wiki_id, title).
     '''
     res = []
@@ -130,15 +153,15 @@ def search_body():
 
 @app.route("/search_title")
 def search_title():
-    ''' Returns ALL (not just top 100) search results that contain A QUERY WORD 
-        IN THE TITLE of articles, ordered in descending order of the NUMBER OF 
-        DISTINCT QUERY WORDS that appear in the title. DO NOT use stemming. DO 
-        USE the staff-provided tokenizer from Assignment 3 (GCP part) to do the 
-        tokenization and remove stopwords. For example, a document 
-        with a title that matches two distinct query words will be ranked before a 
-        document with a title that matches only one distinct query word, 
-        regardless of the number of times the term appeared in the title (or 
-        query). 
+    ''' Returns ALL (not just top 100) search results that contain A QUERY WORD
+        IN THE TITLE of articles, ordered in descending order of the NUMBER OF
+        DISTINCT QUERY WORDS that appear in the title. DO NOT use stemming. DO
+        USE the staff-provided tokenizer from Assignment 3 (GCP part) to do the
+        tokenization and remove stopwords. For example, a document
+        with a title that matches two distinct query words will be ranked before a
+        document with a title that matches only one distinct query word,
+        regardless of the number of times the term appeared in the title (or
+        query).
 
         Test this by navigating to the a URL like:
          http://YOUR_SERVER_DOMAIN/search_title?query=hello+world
@@ -146,7 +169,7 @@ def search_title():
         if you're using ngrok on Colab or your external IP on GCP.
     Returns:
     --------
-        list of ALL (not just top 100) search results, ordered from best to 
+        list of ALL (not just top 100) search results, ordered from best to
         worst where each element is a tuple (wiki_id, title).
     '''
     res = []
@@ -160,15 +183,15 @@ def search_title():
 
 @app.route("/search_anchor")
 def search_anchor():
-    ''' Returns ALL (not just top 100) search results that contain A QUERY WORD 
-        IN THE ANCHOR TEXT of articles, ordered in descending order of the 
-        NUMBER OF QUERY WORDS that appear in anchor text linking to the page. 
-        DO NOT use stemming. DO USE the staff-provided tokenizer from Assignment 
-        3 (GCP part) to do the tokenization and remove stopwords. For example, 
-        a document with a anchor text that matches two distinct query words will 
-        be ranked before a document with anchor text that matches only one 
-        distinct query word, regardless of the number of times the term appeared 
-        in the anchor text (or query). 
+    ''' Returns ALL (not just top 100) search results that contain A QUERY WORD
+        IN THE ANCHOR TEXT of articles, ordered in descending order of the
+        NUMBER OF QUERY WORDS that appear in anchor text linking to the page.
+        DO NOT use stemming. DO USE the staff-provided tokenizer from Assignment
+        3 (GCP part) to do the tokenization and remove stopwords. For example,
+        a document with a anchor text that matches two distinct query words will
+        be ranked before a document with anchor text that matches only one
+        distinct query word, regardless of the number of times the term appeared
+        in the anchor text (or query).
 
         Test this by navigating to the a URL like:
          http://YOUR_SERVER_DOMAIN/search_anchor?query=hello+world
@@ -176,7 +199,7 @@ def search_anchor():
         if you're using ngrok on Colab or your external IP on GCP.
     Returns:
     --------
-        list of ALL (not just top 100) search results, ordered from best to 
+        list of ALL (not just top 100) search results, ordered from best to
         worst where each element is a tuple (wiki_id, title).
     '''
     res = []
@@ -184,13 +207,13 @@ def search_anchor():
     if len(query) == 0:
       return jsonify(res)
     # BEGIN SOLUTION
-    
+
     # END SOLUTION
     return jsonify(res)
 
 @app.route("/get_pagerank", methods=['POST'])
 def get_pagerank():
-    ''' Returns PageRank values for a list of provided wiki article IDs. 
+    ''' Returns PageRank values for a list of provided wiki article IDs.
 
         Test this by issuing a POST request to a URL like:
           http://YOUR_SERVER_DOMAIN/get_pagerank
@@ -228,7 +251,7 @@ def get_pageview():
     Returns:
     --------
         list of ints:
-          list of page view numbers from August 2021 that correrspond to the 
+          list of page view numbers from August 2021 that correrspond to the
           provided list article IDs.
     '''
     res = []
@@ -240,7 +263,11 @@ def get_pageview():
         res.append(page_views.get(wiki_id,0))
     # END SOLUTION
     return jsonify(res)
-
+def read_posting(index, term, dir_name):
+    if term not in index.posting_locs:
+        return term, []
+    posting_list = index.read_a_posting_list(base_dir=dir_name, w=term, bucket_name=BUCKET_NAME)
+    return term, posting_list
 def run(**options):
     app.run(**options)
 
