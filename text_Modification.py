@@ -2,7 +2,6 @@ import re
 from nltk.stem.porter import PorterStemmer
 from nltk.corpus import stopwords
 import nltk
-
 nltk.download('stopwords')
 english_stopwords = frozenset(stopwords.words('english'))
 corpus_stopwords = {

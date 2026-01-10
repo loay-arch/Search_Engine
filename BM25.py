@@ -11,10 +11,8 @@ class BM25:
 
     Attributes
     ----------
-    tf_ : list[dict[str, int]]
-        Term Frequency per document. So [{'hi': 1}] means
-        the first document contains the term 'hi' 1 time.
-        The frequnecy is normilzied by the max term frequency for each document.
+    N_ : int
+        Total number of documents in the corpus
 
     doc_len_ : dict[int]
         Number of terms per document. So [3] = 10 means the
@@ -24,11 +22,9 @@ class BM25:
         Document Frequency per term. i.e. Number of documents in the
         corpus that contains the term.
 
-    avg_doc_len_ : float
+    avgdl_ : float
         Average number of terms for documents in the corpus.
 
-    idf_ : dict[str, float]
-        Inverse Document Frequency per term.
     """
 
     def __init__(self,doc_len,df,N,total_terms,k1=1.5, b=0.75):
