@@ -1,5 +1,3 @@
-import os
-
 from flask import Flask, request, jsonify
 import pickle
 from text_Modification import all_stopwords,RE_WORD,ps
@@ -13,7 +11,6 @@ class MyFlaskApp(Flask):
     def run(self, host=None, port=None, debug=None, **options):
         super(MyFlaskApp, self).run(host=host, port=port, debug=debug, **options)
 # then i write down the path to the indices i want to load
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\asust\Desktop\search_engine_git\Search_Engine\uni-project-480107-d6cc24a4a250.json"
 BUCKET_NAME = "214682189"
 TITLE_DIR = "title_index"
 TITLE_INDEX = "title"
@@ -277,4 +274,4 @@ def run(**options):
 
 if __name__ == '__main__':
     # run the Flask RESTful API, make the server publicly available (host='0.0.0.0') on port 8080
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    app.run(host='0.0.0.0', port=8080, debug=True)
